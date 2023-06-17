@@ -1,6 +1,6 @@
 #include "vulkan/vulkan.h"
 #include "vulkan/vk_layer.h"
-#include "vulkan/vk_layer_dispatch_table.h"
+#include "vulkan/generated/vk_layer_dispatch_table.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -39,6 +39,7 @@ static VkResult ChooseDevice(VkInstance                          instance,
                              const char* const                   env,
                              VkPhysicalDevice&                   outDevice)
 {
+    static int deviceIndex = 9999;
     std::vector<VkPhysicalDevice> devices;
     uint32_t count = 0;
 
@@ -58,12 +59,30 @@ static VkResult ChooseDevice(VkInstance                          instance,
 
     result = dispatch.EnumeratePhysicalDevices(instance, &count, &devices[0]);
 
+    if (deviceIndex < 9999)
+    {
+        outDevice = devices[deviceIndex];
+        return VK_SUCCESS;
+    }
+
+    printf("Found %d devices\n", count);
+
     if (result != VK_SUCCESS)
     {
         return result;
     }
 
-    int deviceIndex = atoi(env);
+    for (unsigned int i = 0; i < devices.size(); i++)
+    {
+        VkPhysicalDeviceProperties properties = {};
+        dispatch.GetPhysicalDeviceProperties(devices[i], &properties);
+        printf("Device %d: (%u) %s\n", i, properties.deviceID, properties.deviceName);
+        char *pch = strstr(properties.deviceName, env);
+        if (pch)
+        {
+            deviceIndex = i;
+        }
+    }
 
     if (deviceIndex >= count)
     {
@@ -205,6 +224,7 @@ DeviceChooserLayer_CreateInstance(const VkInstanceCreateInfo*  pCreateInfo,
     GET(EnumeratePhysicalDevices);
     GET(EnumeratePhysicalDeviceGroups);
     GET(EnumeratePhysicalDeviceGroupsKHR);
+    GET(GetPhysicalDeviceProperties);
 
     #undef GET
 
