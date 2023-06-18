@@ -2,11 +2,16 @@
 #include "vulkan/vk_layer.h"
 #include "vulkan/generated/vk_layer_dispatch_table.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <vector>
+#include <fstream>
+#include <gtk/gtk.h>
 
 #undef VK_LAYER_EXPORT
 #define VK_LAYER_EXPORT extern "C"
@@ -34,6 +39,118 @@ inline VkLayerDispatchTable& GetDeviceDispatch(DispatchableType object)
     return gDeviceDispatch[GetKey(object)];
 }
 
+// Callback function for handling option selection
+static void option_selected(GtkComboBox *combo_box, gpointer data)
+{
+    int* result = static_cast<int*>(data);
+    *result = gtk_combo_box_get_active(combo_box);
+}
+
+static int run_gtk_pick(std::vector<char*> options)
+{
+    int argc = 0;
+    char **argv = nullptr;
+    gtk_init(&argc, &argv);
+
+    // Create the main window
+    GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(window), "Pick an Option");
+    gtk_container_set_border_width(GTK_CONTAINER(window), 10);
+    gtk_widget_set_size_request(window, 250, 150);
+    g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+
+    // Create a vertical box to hold the combo box
+    GtkWidget *vbox = gtk_vbox_new(TRUE, 5);
+    gtk_container_add(GTK_CONTAINER(window), vbox);
+
+    // Create the combo box
+    GtkListStore *store = gtk_list_store_new(1, G_TYPE_STRING);
+    GtkTreeIter iter;
+
+    // Add options to the combo box
+    for (unsigned int i = 0; i < options.size(); i++)
+    {
+        //printf("list %d: %s\n", i, options[i]);
+        gtk_list_store_append(store, &iter);
+        gtk_list_store_set(store, &iter, 0, options[i], -1);
+    }
+
+    GtkWidget *combo_box = gtk_combo_box_new_with_model(GTK_TREE_MODEL(store));
+    g_object_unref(store);
+    gtk_box_pack_start(GTK_BOX(vbox), combo_box, TRUE, TRUE, 0);
+
+    GtkCellRenderer *renderer = gtk_cell_renderer_text_new();
+    gtk_cell_layout_pack_start(GTK_CELL_LAYOUT(combo_box), renderer, TRUE);
+    gtk_cell_layout_set_attributes(GTK_CELL_LAYOUT(combo_box), renderer, "text", 0, NULL);
+
+    int result;
+    g_signal_connect(combo_box, "changed", G_CALLBACK(option_selected), &result);
+
+    // Set the first item as preselected
+    gtk_combo_box_set_active(GTK_COMBO_BOX(combo_box), 0);
+
+    // Show all the widgets
+    gtk_widget_show_all(window);
+
+    // Run the main GTK+ event loop
+    gtk_main();
+
+    return result;
+}
+
+static int get_family_index(const char* familyName)
+{
+    char fileName[1000];
+    sprintf(fileName, "/tmp/vkdevicechooser/%s", familyName);
+
+    if (FILE *file = fopen(fileName, "r"))
+    {
+        int result;
+        fscanf(file,"%d", &result);
+        fclose(file);
+        return result;
+    }
+    else
+    {
+        return -1;
+    }
+}
+
+static void set_family_index(int index, const char* familyName)
+{
+    char fileName[1000];
+    sprintf(fileName, "/tmp/vkdevicechooser/%s", familyName);
+
+    struct stat status = { 0 };
+    if( stat("/tmp/vkdevicechooser", &status) == -1 ) {mkdir( "/tmp/vkdevicechooser", 0777 );}
+
+    FILE* newfile = tmpfile();
+    newfile = fopen(fileName, "w");
+    fprintf(newfile, "%d", index);
+    fclose(newfile);
+}
+
+bool isNumber(const char* str)
+{
+    // Check if each character in the string is a digit
+    for (int i = 0; str[i] != '\0'; ++i)
+    {
+        if (!std::isdigit(str[i]))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool startsWith(const char* str, const char* prefix)
+{
+    // Compare the first 'n' characters of 'str' with 'prefix'
+    size_t prefixLen = std::strlen(prefix);
+    return std::strncmp(str, prefix, prefixLen) == 0;
+}
+
 static VkResult ChooseDevice(VkInstance                          instance,
                              const VkLayerInstanceDispatchTable& dispatch,
                              const char* const                   env,
@@ -59,6 +176,10 @@ static VkResult ChooseDevice(VkInstance                          instance,
 
     result = dispatch.EnumeratePhysicalDevices(instance, &count, &devices[0]);
 
+    if (result != VK_SUCCESS)
+    {
+        return result;
+    }
     if (deviceIndex < 9999)
     {
         outDevice = devices[deviceIndex];
@@ -67,35 +188,100 @@ static VkResult ChooseDevice(VkInstance                          instance,
 
     printf("Found %d devices\n", count);
 
-    if (result != VK_SUCCESS)
+    if (isNumber(env))
     {
-        return result;
-    }
+        deviceIndex = atoi(env);
 
-    for (unsigned int i = 0; i < devices.size(); i++)
-    {
-        VkPhysicalDeviceProperties properties = {};
-        dispatch.GetPhysicalDeviceProperties(devices[i], &properties);
-        printf("Device %d: (%u) %s\n", i, properties.deviceID, properties.deviceName);
-        char *pch = strstr(properties.deviceName, env);
-        if (pch)
+        if (deviceIndex >= count)
         {
-            deviceIndex = i;
+            fprintf(stderr, "Device index %d does not exist, returning device 0\n", deviceIndex);
+            deviceIndex = 0;
         }
+        else
+        {
+            printf("Using Vulkan device index %d\n", deviceIndex);
+        }
+
+        outDevice = devices[deviceIndex];
+        return VK_SUCCESS;
+    }
+    else if (startsWith(env, "name:"))
+    {
+        const char* gpuName = env + 5;
+        for (unsigned int i = 0; i < devices.size(); i++)
+        {
+            VkPhysicalDeviceProperties properties = {};
+            dispatch.GetPhysicalDeviceProperties(devices[i], &properties);
+            printf("Device %d: (%u) %s\n", i, properties.deviceID, properties.deviceName);
+            char *pch = strstr(properties.deviceName, gpuName);
+            if (pch)
+            {
+                deviceIndex = i;
+            }
+        }
+        if (deviceIndex >= count)
+        {
+            fprintf(stderr, "Device does not exist, returning device 0\n");
+            deviceIndex = 0;
+        }
+        else
+        {
+            printf("Using Vulkan device index %d\n", deviceIndex);
+        }
+
+        outDevice = devices[deviceIndex];
+        return VK_SUCCESS;
+    }
+    else if (std::strcmp(env, "letmechoose") == 0)
+    {
+        std::vector<char*> deviceNames;
+        deviceNames.resize(count);
+        for (unsigned int i = 0; i < devices.size(); i++)
+        {
+            VkPhysicalDeviceProperties properties = {};
+            dispatch.GetPhysicalDeviceProperties(devices[i], &properties);
+            deviceNames[i] = new char[256];
+            strcpy(deviceNames[i], properties.deviceName);
+        }
+        deviceIndex = run_gtk_pick(deviceNames);
+        printf("Using Vulkan device \"%s\" with index %d\n", deviceNames[deviceIndex], deviceIndex);
+
+        outDevice = devices[deviceIndex];
+        return VK_SUCCESS;
+    }
+    else if (startsWith(env, "letmechoose:"))
+    {
+        const char* programFamily = env + 12;
+        int familyIndex = get_family_index(programFamily);
+        if (familyIndex != -1)
+        {
+            deviceIndex = familyIndex;
+            outDevice = devices[deviceIndex];
+            return VK_SUCCESS;
+        }
+
+        std::vector<char*> deviceNames;
+        deviceNames.resize(count);
+        for (unsigned int i = 0; i < devices.size(); i++)
+        {
+            VkPhysicalDeviceProperties properties = {};
+            dispatch.GetPhysicalDeviceProperties(devices[i], &properties);
+            deviceNames[i] = new char[256];
+            strcpy(deviceNames[i], properties.deviceName);
+        }
+        deviceIndex = run_gtk_pick(deviceNames);
+        printf("Using Vulkan device \"%s\" with index %d\n", deviceNames[deviceIndex], deviceIndex);
+
+        set_family_index(deviceIndex, programFamily);
+        outDevice = devices[deviceIndex];
+        return VK_SUCCESS;
     }
 
-    if (deviceIndex >= count)
-    {
-        fprintf(stderr, "Device index %d does not exist, returning device 0\n", deviceIndex);
-        deviceIndex = 0;
-    }
-    else
-    {
-        printf("Using Vulkan device index %d\n", deviceIndex);
-    }
-
-    outDevice = devices[deviceIndex];
+    fprintf(stderr, "Bad usage of vkdevicechooser, returning device 0\n");
+    deviceIndex = 0;
+    outDevice = devices[0];
     return VK_SUCCESS;
+
 }
 
 VK_LAYER_EXPORT VkResult VKAPI_CALL

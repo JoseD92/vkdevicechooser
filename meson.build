@@ -20,6 +20,7 @@ endif
 libdir = get_option('libdir')
 datadir = get_option('datadir')
 vulkanlayerdir = join_paths(datadir, 'vulkan', 'implicit_layer.d')
+gtkdep = dependency('gtk+-3.0')
 
 lib_src = files(
     'layer.cpp',
@@ -33,6 +34,7 @@ vkdevicechooser_lib = library(
     'vkdevicechooser',
     lib_src,
     install: libdir,
+    dependencies : gtkdep
 )
 
 install_data(
