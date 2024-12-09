@@ -1,6 +1,6 @@
 #include "vulkan/vulkan.h"
 #include "vulkan/vk_layer.h"
-#include "vulkan/generated/vk_layer_dispatch_table.h"
+#include "vulkan/utility/vk_dispatch_table.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -16,8 +16,8 @@
 #undef VK_LAYER_EXPORT
 #define VK_LAYER_EXPORT extern "C"
 
-static std::map<void*, VkLayerInstanceDispatchTable> gInstanceDispatch;
-static std::map<void*, VkLayerDispatchTable> gDeviceDispatch;
+static std::map<void*, VkuInstanceDispatchTable> gInstanceDispatch;
+static std::map<void*, VkuDeviceDispatchTable> gDeviceDispatch;
 
 static constexpr char kEnvVariable[] = "VULKAN_DEVICE_INDEX";
 
@@ -28,13 +28,13 @@ inline void* GetKey(DispatchableType object)
 }
 
 template <typename DispatchableType>
-inline VkLayerInstanceDispatchTable& GetInstanceDispatch(DispatchableType object)
+inline VkuInstanceDispatchTable& GetInstanceDispatch(DispatchableType object)
 {
     return gInstanceDispatch[GetKey(object)];
 }
 
 template <typename DispatchableType>
-inline VkLayerDispatchTable& GetDeviceDispatch(DispatchableType object)
+inline VkuDeviceDispatchTable& GetDeviceDispatch(DispatchableType object)
 {
     return gDeviceDispatch[GetKey(object)];
 }
@@ -152,7 +152,7 @@ bool startsWith(const char* str, const char* prefix)
 }
 
 static VkResult ChooseDevice(VkInstance                          instance,
-                             const VkLayerInstanceDispatchTable& dispatch,
+                             const VkuInstanceDispatchTable& dispatch,
                              const char* const                   env,
                              VkPhysicalDevice&                   outDevice)
 {
@@ -289,7 +289,7 @@ DeviceChooserLayer_EnumeratePhysicalDevices(VkInstance        instance,
                                             uint32_t*         pPhysicalDeviceCount,
                                             VkPhysicalDevice* pPhysicalDevices)
 {
-    const VkLayerInstanceDispatchTable& dispatch = GetInstanceDispatch(instance);
+    const VkuInstanceDispatchTable& dispatch = GetInstanceDispatch(instance);
 
     const char* const env = getenv(kEnvVariable);
     if (!env)
@@ -326,7 +326,7 @@ DeviceChooserLayer_EnumeratePhysicalDeviceGroupsKHR(VkInstance                  
                                                     uint32_t*                           pPhysicalDeviceGroupCount,
                                                     VkPhysicalDeviceGroupPropertiesKHR* pPhysicalDeviceGroups)
 {
-    const VkLayerInstanceDispatchTable& dispatch = GetInstanceDispatch(instance);
+    const VkuInstanceDispatchTable& dispatch = GetInstanceDispatch(instance);
 
     const char* const env = getenv(kEnvVariable);
     if (!env)
@@ -403,7 +403,7 @@ DeviceChooserLayer_CreateInstance(const VkInstanceCreateInfo*  pCreateInfo,
     #define GET(func) \
         dispatchTable.func = (PFN_vk##func)gpa(*pInstance, "vk" #func);
 
-    VkLayerInstanceDispatchTable dispatchTable;
+    VkuInstanceDispatchTable dispatchTable;
     dispatchTable.GetInstanceProcAddr = gpa;
     GET(EnumerateDeviceExtensionProperties);
     GET(DestroyInstance);
@@ -465,7 +465,7 @@ DeviceChooserLayer_CreateDevice(VkPhysicalDevice             physicalDevice,
     #define GET(func) \
         dispatchTable.func = (PFN_vk##func)gdpa(*pDevice, "vk" #func);
 
-    VkLayerDispatchTable dispatchTable;
+    VkuDeviceDispatchTable dispatchTable;
     dispatchTable.GetDeviceProcAddr = gdpa;
     GET(DestroyDevice);
 
